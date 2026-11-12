@@ -86,7 +86,8 @@
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; }
   th { color: var(--sub); font-size: 15px; font-weight: normal; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td .btn.small { white-space: nowrap; }
   tr.click { cursor: pointer; }
   tr.click:active { background: #f6f3ee; }
   tr.total td { font-weight: bold; border-bottom: none; }
@@ -156,12 +157,16 @@ const STORAGE_KEY = 'kintai-app-v1';
 function loadData() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved && Array.isArray(saved.staff)) return saved;
+    if (saved && Array.isArray(saved.staff)) {
+      if (saved.roundUnit === undefined) saved.roundUnit = 15; // 前のバージョンのデータ用
+      return saved;
+    }
   } catch (e) { /* 読み込めない時は空のデータで始める */ }
   return {
     staff: [],      // スタッフ一覧 { id, name, wage(時給), retired(退職) }
     records: [],    // 勤務記録 { id, staffId, in(出勤時刻), out(退勤時刻), wage(その日の時給) }
-    pin: '0000'     // 給料・設定画面を開くための暗証番号
+    pin: '0000',    // 給料・設定画面を開くための暗証番号
+    roundUnit: 15   // 打刻時刻をそろえる単位（分）。0ならそろえない
   };
 }
 
@@ -208,9 +213,35 @@ function openRecord(staffId) { return data.records.find(r => r.staffId === staff
    給料の計算
    勤務時間（分）× 時給 ÷ 60 を月ごとに合計し、1円未満は切り捨て
    ========================================================= */
+
+// 打刻時刻を「丸め単位」でそろえる
+//   出勤(up=true)  → 次の区切りに切り上げ  例：16:58 → 17:00
+//   退勤(up=false) → 前の区切りに切り捨て  例：20:03 → 20:00
+function roundTime(iso, up) {
+  const d = new Date(iso);
+  d.setSeconds(0, 0);
+  const unit = Number(data.roundUnit) || 0;
+  if (!unit) return d;
+  const mins = d.getHours() * 60 + d.getMinutes();
+  const r = up ? Math.ceil(mins / unit) * unit : Math.floor(mins / unit) * unit;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, r);
+}
+
+// 給料計算に使う時刻を表示する（実際の打刻と違う時は、小さく実際の時刻も出す）
+function fmtPunch(iso, up) {
+  const rounded = roundTime(iso, up);
+  const actual = new Date(iso);
+  let text = fmtTime(rounded.toISOString());
+  if (!isSameDay(rounded, actual) && !up) text = fmtDate(rounded.toISOString()) + ' ' + text;
+  if (rounded.getHours() !== actual.getHours() || rounded.getMinutes() !== actual.getMinutes()) {
+    text += ` <span class="hint">（打刻 ${fmtTime(iso)}）</span>`;
+  }
+  return text;
+}
+
 function workedMinutes(r) {
   if (!r.out) return 0;
-  return Math.max(0, Math.floor((new Date(r.out) - new Date(r.in)) / 60000));
+  return Math.max(0, Math.round((roundTime(r.out, false) - roundTime(r.in, true)) / 60000));
 }
 
 function calcMonth(staffId, year, month) {
@@ -434,8 +465,8 @@ function payDetailHtml(staffId) {
           const m = workedMinutes(r);
           return `<tr>
             <td>${fmtDate(r.in)}</td>
-            <td>${fmtTime(r.in)}</td>
-            <td>${r.out ? (isSameDay(r.in, r.out) ? '' : fmtDate(r.out) + ' ') + fmtTime(r.out) : '<span class="badge on">勤務中</span>'}</td>
+            <td>${fmtPunch(r.in, true)}</td>
+            <td>${r.out ? fmtPunch(r.out, false) : '<span class="badge on">勤務中</span>'}</td>
             <td class="num">${fmtDuration(m)}</td>
             <td class="num">${yen(Number(r.wage))}</td>
             <td class="num">${yen(Math.floor(m * r.wage / 60))}</td>
@@ -513,11 +544,14 @@ function deleteRecord(recordId) {
 
 /* CSVファイル（Excelで開ける表）として保存 */
 function downloadCsv() {
-  const lines = [['名前', '日付', '出勤', '退勤', '勤務時間(分)', '時給', '金額']];
+  const lines = [['名前', '日付', '出勤', '退勤', '出勤(実際の打刻)', '退勤(実際の打刻)', '勤務時間(分)', '時給', '金額']];
   data.staff.forEach(s => {
     calcMonth(s.id, viewYear, viewMonth).list.forEach(r => {
       const m = workedMinutes(r);
-      lines.push([s.name, fmtDate(r.in), fmtTime(r.in), r.out ? fmtTime(r.out) : '勤務中', m, r.wage, Math.floor(m * r.wage / 60)]);
+      lines.push([s.name, fmtDate(r.in),
+        fmtTime(roundTime(r.in, true).toISOString()), r.out ? fmtTime(roundTime(r.out, false).toISOString()) : '勤務中',
+        fmtTime(r.in), r.out ? fmtTime(r.out) : '',
+        m, r.wage, Math.floor(m * r.wage / 60)]);
     });
   });
   const csv = lines.map(l => l.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
@@ -553,6 +587,21 @@ function renderSettings() {
       </table>`}
       <p><button class="btn primary" onclick="editStaff(null)">＋ スタッフを追加</button></p>
       <p class="hint">時給を変えると、それ以降の出勤から新しい時給で計算されます（過去の記録はそのまま）。</p>
+    </div>
+
+    <div class="panel">
+      <h2>打刻時刻のそろえ方（丸め）</h2>
+      <div class="row">
+        <select id="round-unit" onchange="changeRoundUnit(this.value)"
+          style="font-size:20px;padding:10px;border-radius:10px;border:1px solid #ccc;background:#fff">
+          ${[0, 5, 10, 15, 30].map(u => `<option value="${u}" ${Number(data.roundUnit) === u ? 'selected' : ''}>${u ? u + '分ごと' : 'そろえない（1分単位）'}</option>`).join('')}
+        </select>
+      </div>
+      <p class="hint">
+        出勤は次の区切りに切り上げ、退勤は前の区切りに切り捨てて計算します。<br>
+        例（15分ごと）：16:58 出勤 → 17:00、20:03 退勤 → 20:00<br>
+        ※ 実際に押した時刻も記録に残ります。変更すると、過去の記録の計算も変わります。
+      </p>
     </div>
 
     <div class="panel">
@@ -610,6 +659,12 @@ function saveStaff(staffId) {
   saveData();
   closeModal();
   renderSettings();
+}
+
+function changeRoundUnit(value) {
+  data.roundUnit = Number(value);
+  saveData();
+  toast('打刻時刻のそろえ方を変更しました');
 }
 
 function changePin() {
