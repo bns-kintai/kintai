@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- iPadの「ホーム画面に追加」でアプリのように全画面で開くための設定 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="勤怠">
+<title>お店の勤怠</title>
+<style>
+  /* ===== 見た目（色や大きさ）の設定 ===== */
+  :root {
+    --bg: #f4f1ec;
+    --card: #ffffff;
+    --text: #2b2b2b;
+    --sub: #777;
+    --line: #e2ddd5;
+    --main: #2f6f5e;     /* メインの色（緑） */
+    --in: #2f8f5b;       /* 出勤ボタンの色 */
+    --out: #d9822b;      /* 退勤ボタンの色 */
+    --danger: #c0392b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+    font-size: 18px;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    background: var(--main); color: #fff;
+    padding: calc(14px + env(safe-area-inset-top)) 24px 14px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  header h1 { margin: 0; font-size: 22px; }
+  #clock { text-align: right; }
+  #clock .time { font-size: 34px; font-weight: bold; font-variant-numeric: tabular-nums; }
+  #clock .date { font-size: 15px; opacity: .85; }
+
+  nav { display: flex; background: #fff; border-bottom: 1px solid var(--line); }
+  nav button {
+    flex: 1; padding: 16px; font-size: 18px; border: none; background: none;
+    color: var(--sub); border-bottom: 4px solid transparent;
+  }
+  nav button.active { color: var(--main); border-bottom-color: var(--main); font-weight: bold; }
+
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  section { display: none; }
+  section.show { display: block; }
+  h2 { font-size: 20px; margin: 8px 0 16px; }
+
+  /* 打刻画面のスタッフカード */
+  .staff-grid {
+    display: grid; gap: 18px;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  }
+  .staff-card {
+    background: var(--card); border-radius: 18px; padding: 26px 20px;
+    border: 3px solid transparent; box-shadow: 0 2px 6px rgba(0,0,0,.06);
+    text-align: center; font-size: 18px; width: 100%; color: var(--text);
+  }
+  .staff-card:active { transform: scale(.98); }
+  .staff-card .name { font-size: 28px; font-weight: bold; margin-bottom: 10px; }
+  .staff-card.working { border-color: var(--in); background: #f0faf4; }
+  .badge { display: inline-block; padding: 5px 14px; border-radius: 99px; font-size: 16px; }
+  .badge.on { background: var(--in); color: #fff; }
+  .badge.off { background: #eee; color: var(--sub); }
+  .warn { color: var(--danger); font-size: 14px; margin-top: 6px; }
+
+  /* ボタン共通 */
+  .btn {
+    display: inline-block; border: none; border-radius: 12px; padding: 14px 22px;
+    font-size: 18px; background: #e8e4dd; color: var(--text);
+  }
+  .btn.primary { background: var(--main); color: #fff; }
+  .btn.danger { background: var(--danger); color: #fff; }
+  .btn.small { padding: 8px 14px; font-size: 16px; }
+  .btn.big { width: 100%; padding: 26px; font-size: 30px; font-weight: bold; color: #fff; border-radius: 16px; }
+  .btn.big.in { background: var(--in); }
+  .btn.big.out { background: var(--out); }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+
+  /* 表 */
+  .panel { background: var(--card); border-radius: 16px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 6px rgba(0,0,0,.05); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+  th { color: var(--sub); font-size: 15px; font-weight: normal; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.click { cursor: pointer; }
+  tr.click:active { background: #f6f3ee; }
+  tr.total td { font-weight: bold; border-bottom: none; }
+  .month-nav { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+  .month-nav .label { font-size: 24px; font-weight: bold; min-width: 170px; text-align: center; }
+  .empty { color: var(--sub); text-align: center; padding: 40px 0; }
+  .hint { color: var(--sub); font-size: 15px; }
+
+  /* ポップアップ（モーダル） */
+  #overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    display: none; align-items: center; justify-content: center; padding: 20px; z-index: 10;
+  }
+  #overlay.show { display: flex; }
+  #modal {
+    background: #fff; border-radius: 20px; padding: 28px; width: 100%; max-width: 480px;
+    max-height: 90vh; overflow-y: auto;
+  }
+  #modal h3 { margin: 0 0 16px; font-size: 24px; }
+  label { display: block; margin: 14px 0 6px; color: var(--sub); font-size: 15px; }
+  input[type=text], input[type=number], input[type=password], input[type=datetime-local] {
+    width: 100%; font-size: 20px; padding: 12px; border: 1px solid #ccc; border-radius: 10px;
+    background: #fff; color: var(--text);
+  }
+  .modal-actions { display: flex; gap: 12px; margin-top: 24px; }
+  .modal-actions .btn { flex: 1; }
+
+  /* 打刻後に出るメッセージ */
+  #toast {
+    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    background: #2b2b2b; color: #fff; padding: 18px 30px; border-radius: 14px;
+    font-size: 22px; opacity: 0; pointer-events: none; transition: opacity .3s; z-index: 20;
+    text-align: center; max-width: 90vw;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>お店の勤怠</h1>
+  <div id="clock"><div class="time">--:--</div><div class="date"></div></div>
+</header>
+
+<nav>
+  <button id="tab-punch" class="active" onclick="showTab('punch')">打刻</button>
+  <button id="tab-pay" onclick="showTab('pay')">給料計算</button>
+  <button id="tab-settings" onclick="showTab('settings')">設定</button>
+</nav>
+
+<main>
+  <section id="view-punch" class="show"></section>
+  <section id="view-pay"></section>
+  <section id="view-settings"></section>
+</main>
+
+<div id="overlay"><div id="modal"></div></div>
+<div id="toast"></div>
+
+<script>
+/* =========================================================
+   データの保存と読み込み
+   データはこのiPadのブラウザ（Safari）の中に保存されます。
+   ========================================================= */
+const STORAGE_KEY = 'kintai-app-v1';
+
+function loadData() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (saved && Array.isArray(saved.staff)) return saved;
+  } catch (e) { /* 読み込めない時は空のデータで始める */ }
+  return {
+    staff: [],      // スタッフ一覧 { id, name, wage(時給), retired(退職) }
+    records: [],    // 勤務記録 { id, staffId, in(出勤時刻), out(退勤時刻), wage(その日の時給) }
+    pin: '0000'     // 給料・設定画面を開くための暗証番号
+  };
+}
+
+let data = loadData();
+
+function saveData() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    alert('保存に失敗しました。プライベートブラウズをオフにしてください。');
+  }
+}
+
+/* =========================================================
+   便利な小道具（日付・時間の表示など）
+   ========================================================= */
+const pad = n => String(n).padStart(2, '0');
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
+
+function fmtTime(iso) { const d = new Date(iso); return `${d.getHours()}:${pad(d.getMinutes())}`; }
+function fmtDate(iso) { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()}(${WEEK[d.getDay()]})`; }
+function isToday(iso) { return new Date(iso).toDateString() === new Date().toDateString(); }
+function fmtDuration(min) { return `${Math.floor(min / 60)}時間${pad(min % 60)}分`; }
+function yen(n) { return n.toLocaleString('ja-JP') + '円'; }
+
+// 名前などをHTMLに入れる時に、記号が悪さをしないようにする
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// 入力欄(datetime-local)用の形式 "2026-11-12T09:00" に変換
+function toInputValue(iso) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function findStaff(id) { return data.staff.find(s => s.id === id); }
+
+// 今「勤務中」の記録（退勤がまだの記録）を探す
+function openRecord(staffId) { return data.records.find(r => r.staffId === staffId && !r.out); }
+
+/* =========================================================
+   給料の計算
+   勤務時間（分）× 時給 ÷ 60 を月ごとに合計し、1円未満は切り捨て
+   ========================================================= */
+function workedMinutes(r) {
+  if (!r.out) return 0;
+  return Math.max(0, Math.floor((new Date(r.out) - new Date(r.in)) / 60000));
+}
+
+function calcMonth(staffId, year, month) {
+  const list = data.records
+    .filter(r => {
+      const d = new Date(r.in);
+      return r.staffId === staffId && d.getFullYear() === year && d.getMonth() === month;
+    })
+    .sort((a, b) => new Date(a.in) - new Date(b.in));
+
+  let minutes = 0, payX60 = 0;
+  const days = new Set();
+  list.forEach(r => {
+    const m = workedMinutes(r);
+    minutes += m;
+    payX60 += m * Number(r.wage || 0);
+    if (r.out) days.add(new Date(r.in).toDateString());
+  });
+  return { list, minutes, days: days.size, pay: Math.floor(payX60 / 60) };
+}
+
+/* =========================================================
+   画面の切り替え
+   ========================================================= */
+let unlocked = false; // 暗証番号を入力済みかどうか
+
+function showTab(name) {
+  // 給料・設定は暗証番号が必要
+  if (name !== 'punch' && !unlocked) {
+    askPin(() => { unlocked = true; showTab(name); });
+    return;
+  }
+  // 打刻画面に戻ったらロックし直す（スタッフが給料画面を見られないように）
+  if (name === 'punch') unlocked = false;
+
+  ['punch', 'pay', 'settings'].forEach(t => {
+    document.getElementById('tab-' + t).classList.toggle('active', t === name);
+    document.getElementById('view-' + t).classList.toggle('show', t === name);
+  });
+  if (name === 'punch') renderPunch();
+  if (name === 'pay') { detailStaffId = null; renderPay(); }
+  if (name === 'settings') renderSettings();
+}
+
+/* ポップアップ表示 */
+function openModal(html) {
+  document.getElementById('modal').innerHTML = html;
+  document.getElementById('overlay').classList.add('show');
+  const first = document.querySelector('#modal input');
+  if (first) setTimeout(() => first.focus(), 50);
+}
+function closeModal() { document.getElementById('overlay').classList.remove('show'); }
+
+/* 画面下に一時的なメッセージを出す */
+let toastTimer;
+function toast(html) {
+  const el = document.getElementById('toast');
+  el.innerHTML = html;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+/* 暗証番号の入力 */
+let pinCallback = null;
+function askPin(callback) {
+  pinCallback = callback;
+  openModal(`
+    <h3>暗証番号</h3>
+    <p class="hint">管理者用の画面です。（はじめは 0000）</p>
+    <form onsubmit="checkPin(event)">
+      <input type="password" id="pin-input" inputmode="numeric" autocomplete="off">
+      <p id="pin-error" class="warn"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn" onclick="closeModal()">キャンセル</button>
+        <button type="submit" class="btn primary">開く</button>
+      </div>
+    </form>`);
+}
+function checkPin(e) {
+  e.preventDefault();
+  if (document.getElementById('pin-input').value === data.pin) {
+    closeModal();
+    if (pinCallback) pinCallback();
+  } else {
+    document.getElementById('pin-error').textContent = '暗証番号が違います';
+  }
+}
+
+/* =========================================================
+   ① 打刻画面
+   ========================================================= */
+function renderPunch() {
+  const el = document.getElementById('view-punch');
+  const staff = data.staff.filter(s => !s.retired);
+  if (staff.length === 0) {
+    el.innerHTML = `<div class="panel empty">スタッフが登録されていません。<br>上の「設定」からスタッフを追加してください。</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <h2>自分の名前をタッチしてください</h2>
+    <div class="staff-grid">
+      ${staff.map(s => {
+        const rec = openRecord(s.id);
+        let status = `<span class="badge off">退勤中</span>`;
+        if (rec) {
+          status = `<span class="badge on">勤務中 ${isToday(rec.in) ? '' : fmtDate(rec.in) + ' '}${fmtTime(rec.in)}〜</span>`;
+          if (!isToday(rec.in)) status += `<div class="warn">退勤の押し忘れ？</div>`;
+        }
+        return `<button class="staff-card ${rec ? 'working' : ''}" onclick="punchDialog('${s.id}')">
+                  <div class="name">${esc(s.name)}</div>${status}
+                </button>`;
+      }).join('')}
+    </div>`;
+}
+
+function punchDialog(staffId) {
+  const s = findStaff(staffId);
+  const rec = openRecord(staffId);
+  const button = rec
+    ? `<button class="btn big out" onclick="clockOut('${staffId}')">退勤する</button>
+       <p class="hint" style="text-align:center">出勤：${fmtDate(rec.in)} ${fmtTime(rec.in)}</p>`
+    : `<button class="btn big in" onclick="clockIn('${staffId}')">出勤する</button>`;
+  openModal(`
+    <h3 style="text-align:center">${esc(s.name)} さん</h3>
+    <p style="text-align:center;font-size:40px;margin:0 0 20px" class="live-time">${nowText()}</p>
+    ${button}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">キャンセル</button></div>`);
+}
+
+function clockIn(staffId) {
+  const s = findStaff(staffId);
+  if (openRecord(staffId)) return closeModal(); // 二重押し防止
+  const now = new Date().toISOString();
+  data.records.push({ id: uid(), staffId, in: now, out: null, wage: s.wage });
+  saveData();
+  closeModal();
+  renderPunch();
+  toast(`${esc(s.name)}さん　出勤しました（${fmtTime(now)}）<br>今日もよろしくお願いします！`);
+}
+
+function clockOut(staffId) {
+  const s = findStaff(staffId);
+  const rec = openRecord(staffId);
+  if (!rec) return closeModal();
+  rec.out = new Date().toISOString();
+  saveData();
+  closeModal();
+  renderPunch();
+  toast(`${esc(s.name)}さん　お疲れさまでした！<br>勤務時間 ${fmtDuration(workedMinutes(rec))}`);
+}
+
+/* =========================================================
+   ② 給料計算画面
+   ========================================================= */
+let viewYear = new Date().getFullYear();
+let viewMonth = new Date().getMonth(); // 0=1月, 11=12月
+let detailStaffId = null;              // 詳細を見ているスタッフ
+
+function changeMonth(diff) {
+  viewMonth += diff;
+  if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+  if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+  renderPay();
+}
+
+function renderPay() {
+  const el = document.getElementById('view-pay');
+  const monthNav = `
+    <div class="month-nav">
+      <button class="btn" onclick="changeMonth(-1)">◀ 前の月</button>
+      <div class="label">${viewYear}年${viewMonth + 1}月</div>
+      <button class="btn" onclick="changeMonth(1)">次の月 ▶</button>
+    </div>`;
+
+  if (detailStaffId) { el.innerHTML = monthNav + payDetailHtml(detailStaffId); return; }
+
+  // 退職したスタッフも、その月に記録があれば表示する
+  const rows = data.staff
+    .map(s => ({ s, c: calcMonth(s.id, viewYear, viewMonth) }))
+    .filter(({ s, c }) => !s.retired || c.list.length > 0);
+
+  let totalMin = 0, totalPay = 0;
+  rows.forEach(({ c }) => { totalMin += c.minutes; totalPay += c.pay; });
+
+  el.innerHTML = monthNav + `
+    <div class="panel">
+      ${rows.length === 0 ? '<div class="empty">スタッフがいません</div>' : `
+      <table>
+        <tr><th>名前</th><th class="num">出勤日数</th><th class="num">勤務時間</th><th class="num">時給</th><th class="num">給料</th></tr>
+        ${rows.map(({ s, c }) => `
+          <tr class="click" onclick="showDetail('${s.id}')">
+            <td>${esc(s.name)} ›</td>
+            <td class="num">${c.days}日</td>
+            <td class="num">${fmtDuration(c.minutes)}</td>
+            <td class="num">${yen(Number(s.wage))}</td>
+            <td class="num"><b>${yen(c.pay)}</b></td>
+          </tr>`).join('')}
+        <tr class="total"><td>合計</td><td></td><td class="num">${fmtDuration(totalMin)}</td><td></td><td class="num">${yen(totalPay)}</td></tr>
+      </table>`}
+      <p class="hint">名前をタッチすると、日ごとの記録の確認・修正ができます。</p>
+    </div>
+    <button class="btn" onclick="downloadCsv()">この月の記録をCSVで保存（Excel用）</button>`;
+}
+
+function showDetail(staffId) { detailStaffId = staffId; renderPay(); }
+
+function payDetailHtml(staffId) {
+  const s = findStaff(staffId);
+  const c = calcMonth(staffId, viewYear, viewMonth);
+  return `
+    <div class="row" style="margin-bottom:16px">
+      <button class="btn" onclick="detailStaffId=null;renderPay()">‹ 一覧に戻る</button>
+      <h2 style="margin:0">${esc(s.name)} さん　${fmtDuration(c.minutes)}　<span style="color:var(--main)">${yen(c.pay)}</span></h2>
+    </div>
+    <div class="panel">
+      ${c.list.length === 0 ? '<div class="empty">この月の記録はありません</div>' : `
+      <table>
+        <tr><th>日付</th><th>出勤</th><th>退勤</th><th class="num">勤務時間</th><th class="num">時給</th><th class="num">金額</th><th></th></tr>
+        ${c.list.map(r => {
+          const m = workedMinutes(r);
+          return `<tr>
+            <td>${fmtDate(r.in)}</td>
+            <td>${fmtTime(r.in)}</td>
+            <td>${r.out ? (isSameDay(r.in, r.out) ? '' : fmtDate(r.out) + ' ') + fmtTime(r.out) : '<span class="badge on">勤務中</span>'}</td>
+            <td class="num">${fmtDuration(m)}</td>
+            <td class="num">${yen(Number(r.wage))}</td>
+            <td class="num">${yen(Math.floor(m * r.wage / 60))}</td>
+            <td><button class="btn small" onclick="editRecord('${r.id}')">修正</button></td>
+          </tr>`;
+        }).join('')}
+      </table>`}
+    </div>
+    <button class="btn primary" onclick="editRecord(null, '${staffId}')">＋ 記録を手で追加</button>`;
+}
+
+function isSameDay(a, b) { return new Date(a).toDateString() === new Date(b).toDateString(); }
+
+/* 勤務記録の修正・追加 */
+function editRecord(recordId, staffIdForNew) {
+  const r = recordId ? data.records.find(x => x.id === recordId) : null;
+  const staff = findStaff(r ? r.staffId : staffIdForNew);
+  // 新しく追加する時は、表示中の月の1日 9:00〜17:00 を初期値にする
+  const today = new Date();
+  const base = (today.getFullYear() === viewYear && today.getMonth() === viewMonth) ? today : new Date(viewYear, viewMonth, 1);
+  const defIn = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 9, 0);
+  const defOut = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 17, 0);
+
+  openModal(`
+    <h3>${esc(staff.name)} さんの記録${r ? 'を修正' : 'を追加'}</h3>
+    <label>出勤</label>
+    <input type="datetime-local" id="rec-in" value="${toInputValue(r ? r.in : defIn)}">
+    <label>退勤（空にすると「勤務中」）</label>
+    <input type="datetime-local" id="rec-out" value="${r ? (r.out ? toInputValue(r.out) : '') : toInputValue(defOut)}">
+    <label>この日の時給（円）</label>
+    <input type="number" id="rec-wage" inputmode="numeric" value="${r ? r.wage : staff.wage}">
+    <p id="rec-error" class="warn"></p>
+    <div class="modal-actions">
+      ${r ? `<button class="btn danger" onclick="deleteRecord('${r.id}')">削除</button>` : ''}
+      <button class="btn" onclick="closeModal()">キャンセル</button>
+      <button class="btn primary" onclick="saveRecord('${r ? r.id : ''}', '${staff.id}')">保存</button>
+    </div>`);
+}
+
+function saveRecord(recordId, staffId) {
+  const inVal = document.getElementById('rec-in').value;
+  const outVal = document.getElementById('rec-out').value;
+  const wage = Number(document.getElementById('rec-wage').value);
+  const err = document.getElementById('rec-error');
+
+  if (!inVal) return err.textContent = '出勤時刻を入れてください';
+  if (outVal && new Date(outVal) <= new Date(inVal)) return err.textContent = '退勤は出勤より後にしてください';
+  if (!(wage >= 0)) return err.textContent = '時給を正しく入れてください';
+  if (!outVal && data.records.some(x => x.staffId === staffId && !x.out && x.id !== recordId)) {
+    return err.textContent = 'すでに「勤務中」の記録があります。退勤時刻を入れてください';
+  }
+
+  const values = {
+    in: new Date(inVal).toISOString(),
+    out: outVal ? new Date(outVal).toISOString() : null,
+    wage
+  };
+  if (recordId) {
+    Object.assign(data.records.find(x => x.id === recordId), values);
+  } else {
+    data.records.push({ id: uid(), staffId, ...values });
+  }
+  saveData();
+  closeModal();
+  renderPay();
+}
+
+function deleteRecord(recordId) {
+  if (!confirm('この記録を削除しますか？（元に戻せません）')) return;
+  data.records = data.records.filter(x => x.id !== recordId);
+  saveData();
+  closeModal();
+  renderPay();
+}
+
+/* CSVファイル（Excelで開ける表）として保存 */
+function downloadCsv() {
+  const lines = [['名前', '日付', '出勤', '退勤', '勤務時間(分)', '時給', '金額']];
+  data.staff.forEach(s => {
+    calcMonth(s.id, viewYear, viewMonth).list.forEach(r => {
+      const m = workedMinutes(r);
+      lines.push([s.name, fmtDate(r.in), fmtTime(r.in), r.out ? fmtTime(r.out) : '勤務中', m, r.wage, Math.floor(m * r.wage / 60)]);
+    });
+  });
+  const csv = lines.map(l => l.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  downloadFile(`勤怠_${viewYear}年${viewMonth + 1}月.csv`, '﻿' + csv, 'text/csv');
+}
+
+function downloadFile(filename, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* =========================================================
+   ③ 設定画面
+   ========================================================= */
+function renderSettings() {
+  const el = document.getElementById('view-settings');
+  el.innerHTML = `
+    <div class="panel">
+      <h2>スタッフ</h2>
+      ${data.staff.length === 0 ? '<p class="hint">まだ誰も登録されていません。</p>' : `
+      <table>
+        <tr><th>名前</th><th class="num">時給</th><th>状態</th><th></th></tr>
+        ${data.staff.map(s => `
+          <tr>
+            <td>${esc(s.name)}</td>
+            <td class="num">${yen(Number(s.wage))}</td>
+            <td>${s.retired ? '<span class="badge off">退職</span>' : '在籍'}</td>
+            <td style="text-align:right"><button class="btn small" onclick="editStaff('${s.id}')">編集</button></td>
+          </tr>`).join('')}
+      </table>`}
+      <p><button class="btn primary" onclick="editStaff(null)">＋ スタッフを追加</button></p>
+      <p class="hint">時給を変えると、それ以降の出勤から新しい時給で計算されます（過去の記録はそのまま）。</p>
+    </div>
+
+    <div class="panel">
+      <h2>暗証番号</h2>
+      <div class="row">
+        <input type="password" id="new-pin" inputmode="numeric" placeholder="新しい暗証番号" style="max-width:260px">
+        <button class="btn primary" onclick="changePin()">変更する</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>バックアップ</h2>
+      <p class="hint">データはこのiPadの中だけに保存されています。月に1回くらい「保存」しておくと安心です。</p>
+      <div class="row">
+        <button class="btn" onclick="backup()">バックアップを保存</button>
+        <button class="btn" onclick="document.getElementById('restore-file').click()">バックアップから復元</button>
+        <input type="file" id="restore-file" accept=".json,application/json" style="display:none" onchange="restore(this)">
+      </div>
+    </div>`;
+}
+
+function editStaff(staffId) {
+  const s = staffId ? findStaff(staffId) : { name: '', wage: '', retired: false };
+  openModal(`
+    <h3>${staffId ? 'スタッフを編集' : 'スタッフを追加'}</h3>
+    <label>名前</label>
+    <input type="text" id="staff-name" value="${esc(s.name)}" placeholder="例：山田">
+    <label>時給（円）</label>
+    <input type="number" id="staff-wage" inputmode="numeric" value="${s.wage}" placeholder="例：1100">
+    ${staffId ? `<label style="display:flex;gap:10px;align-items:center;color:var(--text)">
+      <input type="checkbox" id="staff-retired" ${s.retired ? 'checked' : ''} style="width:24px;height:24px">
+      退職した（打刻画面に表示しない）</label>` : ''}
+    <p id="staff-error" class="warn"></p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">キャンセル</button>
+      <button class="btn primary" onclick="saveStaff('${staffId || ''}')">保存</button>
+    </div>`);
+}
+
+function saveStaff(staffId) {
+  const name = document.getElementById('staff-name').value.trim();
+  const wage = Number(document.getElementById('staff-wage').value);
+  const err = document.getElementById('staff-error');
+  if (!name) return err.textContent = '名前を入れてください';
+  if (!(wage > 0)) return err.textContent = '時給を入れてください';
+
+  if (staffId) {
+    const s = findStaff(staffId);
+    s.name = name;
+    s.wage = wage;
+    s.retired = document.getElementById('staff-retired').checked;
+  } else {
+    data.staff.push({ id: uid(), name, wage, retired: false });
+  }
+  saveData();
+  closeModal();
+  renderSettings();
+}
+
+function changePin() {
+  const pin = document.getElementById('new-pin').value.trim();
+  if (pin.length < 4) return alert('4けた以上で入れてください');
+  data.pin = pin;
+  saveData();
+  document.getElementById('new-pin').value = '';
+  toast('暗証番号を変更しました');
+}
+
+function backup() {
+  const d = new Date();
+  downloadFile(`勤怠バックアップ_${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`,
+    JSON.stringify(data, null, 2), 'application/json');
+}
+
+function restore(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const d = JSON.parse(reader.result);
+      if (!Array.isArray(d.staff) || !Array.isArray(d.records)) throw new Error();
+      if (!confirm('今のデータをバックアップの内容で置き換えます。よろしいですか？')) return;
+      data = d;
+      if (!data.pin) data.pin = '0000';
+      saveData();
+      renderSettings();
+      toast('復元しました');
+    } catch (e) {
+      alert('このファイルは読み込めませんでした');
+    }
+  };
+  reader.readAsText(file);
+  input.value = '';
+}
+
+/* =========================================================
+   時計（1秒ごとに更新）
+   ========================================================= */
+function nowText() { const d = new Date(); return `${d.getHours()}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
+
+function tick() {
+  const d = new Date();
+  document.querySelector('#clock .time').textContent = `${d.getHours()}:${pad(d.getMinutes())}`;
+  document.querySelector('#clock .date').textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日(${WEEK[d.getDay()]})`;
+  const live = document.querySelector('#modal .live-time');
+  if (live) live.textContent = nowText();
+}
+setInterval(tick, 1000);
+tick();
+
+// ポップアップの外側をタッチしたら閉じる
+document.getElementById('overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closeModal(); });
+
+// 最初の画面を表示
+renderPunch();
+</script>
+</body>
+</html>
